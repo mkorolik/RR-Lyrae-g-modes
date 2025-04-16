@@ -12,6 +12,7 @@ from ipywidgets import interact, IntSlider
 
 from matplotlib.offsetbox import AnchoredOffsetbox, TextArea, HPacker, VPacker
 
+import pyaudio
 
 import seaborn as sns
 
@@ -57,17 +58,17 @@ rgbs = [(1, 1, 1), # X, temp class just for setting upper bound
 
 prof_cols = ['zone', 'mass', 'logR', 'logT', 'logRho', 'logP', 'x_mass_fraction_H', 'y_mass_fraction_He', 'z_mass_fraction_metals', 'pp', 'cno', 'tri_alpha', 'brunt_N', 'lamb_S']
 
-def plot_colors(y, xlim=[30000, 0], ax=None):
+def plot_colors(y, xlim=[30000, 0], ax=None, alpha=1):
     if ax is None:
         ax = plt.gca()
 
-    ax.fill_betweenx(y, spectrals[0], spectrals[1], color=rgbs[1])
-    ax.fill_betweenx(y, spectrals[1], spectrals[2], color=rgbs[2])
-    ax.fill_betweenx(y, spectrals[2], spectrals[3], color=rgbs[3])
-    ax.fill_betweenx(y, spectrals[3], spectrals[4], color=rgbs[4])
-    ax.fill_betweenx(y, spectrals[4], spectrals[5], color=rgbs[5])
-    ax.fill_betweenx(y, spectrals[5], spectrals[6], color=rgbs[6])
-    ax.fill_betweenx(y, spectrals[6], spectrals[7], color=rgbs[7])
+    ax.fill_betweenx(y, spectrals[0], spectrals[1], color=rgbs[1], alpha=alpha)
+    ax.fill_betweenx(y, spectrals[1], spectrals[2], color=rgbs[2], alpha=alpha)
+    ax.fill_betweenx(y, spectrals[2], spectrals[3], color=rgbs[3], alpha=alpha)
+    ax.fill_betweenx(y, spectrals[3], spectrals[4], color=rgbs[4], alpha=alpha)
+    ax.fill_betweenx(y, spectrals[4], spectrals[5], color=rgbs[5], alpha=alpha)
+    ax.fill_betweenx(y, spectrals[5], spectrals[6], color=rgbs[6], alpha=alpha)
+    ax.fill_betweenx(y, spectrals[6], spectrals[7], color=rgbs[7], alpha=alpha)
     # ax.fill_between(y, spectrals[7], 1000, color=rgbs[7])
 
 
@@ -175,6 +176,10 @@ class model:
         # self.he_burn_end = self.index.profile_number[nv_ledoux.index.model_number==mn]
 
 
+    def get_frequencies(self, profile_number, dir='', label=''):
+        path = os.path.join(self.logs_dir, dir, 'profile' + str(profile_number)  + label + '-freqs.dat')
+        return pd.read_table(path, skiprows=5, sep=r'\s+')
+
     def load_gyre(self, profile_number):
         prof = gyre.load_gyre(
             os.path.join(self.logs_dir, 'profile' + str(profile_number) + '.data.GYRE'))
@@ -267,7 +272,7 @@ class model:
                     first = 0
     
         plt.xlabel(r'Effective Temperature $T_{\rm{eff}}$ (K)')
-        plt.ylabel(r'Luminosity ($\rm{L}_\odot$)')
+        plt.ylabel(r'Luminosity $L / \rm{L}_\odot$')
         ax.set_yscale('log')
         ax.invert_xaxis()
     
@@ -447,6 +452,72 @@ class model:
         return find_peak(x, N)
     
 
+    def get_eigenfunctions(self, profile_number, label='-gmode'):
+            eig_dir = os.path.join(self.logs_dir, 'profile' + str(profile_number) + label + '-freqs')
+            eigs = {}
+            
+            for fname in tqdm(os.listdir(eig_dir)):
+                # print(fname)
+                if fname[:2] != '00':
+                    continue
+                eig_i = pd.read_table(os.path.join(eig_dir, fname), sep='\s+', skiprows=5)
+                sph_deg, rad_ord = fname.split('_')
+                eigs[(int(sph_deg), 'x')] = eig_i['x']
+                eigs[(int(sph_deg), int(rad_ord))] = eig_i[['Re(xi_r)', 'Re(xi_h)']]
+            return eigs
+
+    def plot_eigenfunctions(self, eigs, l, n):
+        def plot_eigs(eigs, sph_deg, rad_ord):
+            x  = eigs[(sph_deg, 'x')]
+            eig = eigs[(sph_deg, rad_ord)]
+            plt.plot(x, eig['Re(xi_r)'], label='radial',     lw=3, zorder=11)
+            plt.plot(x, eig['Re(xi_h)'], label='horizontal', lw=3, zorder=10)
+            
+            plt.xlabel(r'fractional radius $r/R$')
+            plt.ylabel(r'normalized eigenfunction $\xi$')
+            plt.axhline(0, ls='--', c='k', alpha=1, zorder=-10)
+            
+            plt.xlim([0, 1])
+            plt.suptitle(r'$\ell = {%d},\; n = {%d}$' % (sph_deg, rad_ord))
+            plt.legend()
+        
+        plot_eigs(eigs, l, n)
+    
+    def plot_mode_inertia(self, profile_number, dir='', filelabel='-gmode', ca='blue', cb='black', mark_l0=False, mark_gamma=False, label=None):
+        f = self.get_frequencies(profile_number, dir=dir, label=filelabel)
+
+        if mark_gamma:
+            i=0
+            idxs = []
+            for x in f['n_p']:
+                if x == 0:
+                    idxs.append(i)
+                i+=1
+            plt.plot(f['Re(freq)'][idxs], f['E_norm'][idxs], lw=0, color=cb, marker='^', alpha=0.5, fillstyle='none')
+        
+        if mark_l0:
+            i=0
+            idxs = []
+            for x in f['l']:
+                if x == 0:
+                    idxs.append(i)
+                i+=1
+            all_idxs = np.arange(len(f))       
+            mask_idxs = np.setdiff1d(all_idxs, idxs)
+
+
+            plt.plot(f['Re(freq)'][idxs], f['E_norm'][idxs], lw=0, color=cb, marker='^', fillstyle='none', alpha=0.5, zorder=10)
+            plt.plot(f['Re(freq)'][mask_idxs], f['E_norm'][mask_idxs], lw=0, color=ca, marker='o', fillstyle='none', label=label)
+
+        else:
+            plt.plot(f['Re(freq)'], f['E_norm'], lw=0, color=ca, marker='o', fillstyle='none', label=label)
+
+        plt.yscale('log')
+        plt.ylabel('Mode Inertia')
+        plt.xlabel('Frequency (uHz)')
+        plt.xscale('log')
+
+
     def plot_nablas(self, prof, ax=None, colors=None, plot_nabla_diff=False, plot_brunt=False, ylim1=[0, 0.5], xlim=[0,1], ylim2=[0,1], legend=True):
         gyre = self.load_gyre(prof)
 
@@ -504,7 +575,7 @@ class model:
 
     
 
-    def plot_kippenhahn(self, xlim=None, xlabel='Age [Gyr]', alpha=True, xm=np.linspace(0, 17, 10000), mdl=None, ax=None, title=None, show_colorbar=True, cmap_color=mpl.cm.Greens):
+    def plot_kippenhahn(self, xlim=None, xlabel='Age [Gyr]', alpha=True, xm=np.linspace(0, 17, 10000), mdl=None, ax=None, title=None, show_colorbar=True, cmap_color='YlOrRd'):
         mass_max = np.min(np.array([np.max(prof.mass) for prof in self.profs]))
         print(mass_max)
         xm = np.linspace(0, mass_max, 10000)
@@ -537,13 +608,13 @@ class model:
         if ax is None:
             ax = plt.gca()
     
-        norm = mpl.colors.Normalize(vmin=-6, vmax=0)
+        norm = mpl.colors.Normalize(vmin=-4, vmax=0)
         cmap = mpl.cm.ScalarMappable(norm=norm, cmap=cmap_color)
         vmin = int(norm.vmin)
         vmax = int(norm.vmax)
     
-        ax.contourf(Y, X, conv, levels=[0,1,2,3,4,5,6,7], vmin=-1, vmax=3, cmap='Greys', zorder=-99999)
-        ax.contourf(Y, X, Z, levels=np.arange(-6, 1, 1), vmin=vmin, vmax=vmax, cmap=cmap_color, zorder=-99999)
+        ax.contourf(Y, X, conv, levels=[0,3], vmin=-1, vmax=3, cmap='Greys', zorder=-99999)
+        ax.contourf(Y, X, Z, levels=np.arange(-4, 1, 0.2), vmin=vmin, vmax=vmax, cmap=cmap_color, zorder=-99999)
 
         ax.set_rasterization_zorder(-1)
     
@@ -1298,7 +1369,22 @@ class model:
         p = [1/(float(f['Re(freq)']) * 10**-6) / 3600][0]
 
         return p
+    
+    def get_first_overtone(self, profile_num):
+        # period in hours
+        freqs = self.freqs[profile_num - 1]
 
+        radial = freqs[freqs['l']==0]
+        if radial.empty: 
+            radial = freqs[freqs['l']=='0']
+
+        f = radial[radial['n_p']==2]
+        if f.empty:
+            f = radial[radial['n_p']=='2']
+
+        p = [1/(float(f['Re(freq)']) * 10**-6) / 3600][0]
+
+        return p
 
     def plot_fundamental(self, max=None, title=None, c=None, label=None, ax=None, crop=False):
         if ax is None:
@@ -1326,6 +1412,104 @@ class model:
 
         ax.set_xlabel('Age (Gyr)')
         ax.set_ylabel('Fundamental Period (hours)')
+
+
+    def fundamental_music(self, duration=0.01, minf=440, maxf=880, map='linear', play_overtones=False):
+        p = pyaudio.PyAudio()
+
+        stream = p.open(format=pyaudio.paFloat32,
+                        channels=1,
+                        rate=44100,
+                        output=True)
+
+        def generate_tone(base_frequencies, harmonic_frequencies, duration_per_freq=duration, fs=44100, amplitudes=[0.9, 0.1]):
+            total_duration = duration_per_freq * (len(base_frequencies) - 1)
+            t = np.linspace(0, total_duration, int(fs * total_duration))
+
+            freq_times = np.linspace(0, total_duration, len(base_frequencies))
+            base_interp = np.interp(t, freq_times, base_frequencies)
+            harm_interp = np.interp(t, freq_times, harmonic_frequencies)
+
+            base_phase = 2 * np.pi * np.cumsum(base_interp) / fs
+            harm_phase = 2 * np.pi * np.cumsum(harm_interp) / fs
+
+            waveform = (
+                amplitudes[0] * np.sin(base_phase) +
+                amplitudes[1] * np.sin(harm_phase)
+            ).astype(np.float32)
+
+            waveform /= np.max(np.abs(waveform))
+            return waveform
+
+          
+        fundamentals = []
+        overtones = []
+        for i in range(1, len(self.profs)):
+            try:
+                fundamentals.append(self.get_fundamental_period(i))
+                if play_overtones is True:
+                    overtones.append(self.get_first_overtone(i))
+            except:
+                pass
+
+
+        def lin_map_to_range(values, new_min=minf, new_max=maxf):
+            old_min = min(values)
+            old_max = max(values)
+            return [
+                new_min + (v - old_min) * (new_max - new_min) / (old_max - old_min)
+                for v in values
+            ]
+
+        def log_map_to_range(values, new_min=minf, new_max=maxf):
+            values = np.array(values)
+            old_min = np.min(values)
+            old_max = np.max(values)
+
+            norm = (values - old_min) / (old_max - old_min)
+
+            log_min = np.log10(new_min)
+            log_max = np.log10(new_max)
+            log_values = log_min + norm * (log_max - log_min)
+
+            return 10 ** log_values
+        
+        if map == 'linear':
+            map_to_range = lin_map_to_range
+        if map == 'log':
+            map_to_range = log_map_to_range
+        
+        base_freqs = map_to_range([1 / (period*3600) for period in fundamentals])
+        harmonic_freqs = np.zeros(len(base_freqs))
+
+        if play_overtones:
+            harmonic_freqs = map_to_range([1 / (p10*3600) for p10 in overtones])
+        
+        wave = generate_tone(base_freqs, harmonic_freqs)
+        stream.write(wave.tobytes())
+                
+
+        stream.stop_stream()
+        stream.close()
+
+        p.terminate()
+
+    
+    def plot_petersen_firstovertone(self, c='blue', label=None):
+        p10s = []
+        pfs = []
+
+        for p in self.index.profile_number:
+            try:
+                p10s.append(self.get_first_overtone(p))
+                pfs.append(self.get_fundamental_period(p))
+            except:
+                pass
+
+        plt.scatter(pfs, [p10s[i]/pfs[i] for i in np.arange(len(pfs))], s=10, facecolors='none', edgecolors=c, label=label)
+
+        plt.xlabel('Fundamental Period (hours)')
+        plt.ylabel(r'Period Ratio ($P_1$/$P_0$)')
 
 
     def plot_pg_vs_fundamental(self, max=None, title=None, c=None, label=None, ax=None, crop=False, spline=False, lam=None, nad=False):
@@ -1390,7 +1574,7 @@ class model:
         
         fundamentals = np.zeros(max)
         pgs = np.zeros(max)
-        for i in range(1, max):
+        for i in tqdm(range(1, max)):
             try:
                 if np.abs(self.get_Pg(i) - self.get_Pg(i-1)) <= 3: 
                     fundamentals[i] = (self.get_fundamental_period(i))
@@ -1732,8 +1916,9 @@ class model:
         # ax.set_ylabel('px/p(l=0, n=2)')
 
     
-    def plot_period_spacing_NEWANDIMPROVED(self, profile, xlim=None, ylim=None):
-        freqs = self.freqs[profile-1]
+    def plot_period_spacing_NEWANDIMPROVED(self, profile, dir='', label='', xlim=None, ylim=None):
+        # freqs = self.freqs[profile-1]
+        freqs = self.get_frequencies(profile, dir=dir, label=label)
 
         freqs.n_g = [int(x) for x in freqs.n_g]
         # try:
